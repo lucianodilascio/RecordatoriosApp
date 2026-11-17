@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
@@ -15,9 +16,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.example.recordatoriosapp.data.Recordatorio
+import com.example.recordatoriosapp.data.model.Reminder
 import com.example.recordatoriosapp.viewmodel.ListaUiState
 import com.example.recordatoriosapp.viewmodel.RecordatorioViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun RecordatoriosAppNavigation(viewModel: RecordatorioViewModel) {
@@ -55,9 +59,64 @@ fun PantallaListado(
     onRecordatorioClick: (String) -> Unit
 ) {
     val uiState by viewModel.listaUiState.collectAsStateWithLifecycle()
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val userPrefs by viewModel.userPreferences.collectAsStateWithLifecycle()
+    
+    var showPreferencesDialog by remember { mutableStateOf(false) }
+
+    if (showPreferencesDialog) {
+        AlertDialog(
+            onDismissRequest = { showPreferencesDialog = false },
+            title = { Text("Preferencias") },
+            text = {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = userPrefs.isDarkMode,
+                            onCheckedChange = { viewModel.toggleDarkMode(it) }
+                        )
+                        Text("Tema Oscuro")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = userPrefs.showCompleted,
+                            onCheckedChange = { viewModel.toggleShowCompleted(it) }
+                        )
+                        Text("Mostrar Completados")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { viewModel.toggleSortOrder() }) {
+                            Text(if (userPrefs.sortOrder == "DATE_DESC") "Orden: Más recientes" else "Orden: Mayor Prioridad")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPreferencesDialog = false }) {
+                    Text("Cerrar")
+                }
+            }
+        )
+    }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Mis Recordatorios") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Mis Recordatorios") },
+                actions = {
+                    IconButton(onClick = { viewModel.sincronizarConServidor() }) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        } else {
+                            Text("🔄")
+                        }
+                    }
+                    IconButton(onClick = { showPreferencesDialog = true }) {
+                        Text("⚙️")
+                    }
+                }
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = onCrearRecordatorio) {
                 Text("+", style = MaterialTheme.typography.headlineMedium)
@@ -71,18 +130,15 @@ fun PantallaListado(
                 }
                 is ListaUiState.Vacio -> {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
-                        Text("No hay recordatorios aún.")
+                        Text("No hay recordatorios aquí.")
                         Button(onClick = onCrearRecordatorio, modifier = Modifier.padding(top = 8.dp)) {
-                            Text("Crear el primero")
+                            Text("Crear uno nuevo")
                         }
                     }
                 }
                 is ListaUiState.Error -> {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
                         Text(estado.mensaje, color = MaterialTheme.colorScheme.error)
-                        Button(onClick = { viewModel.cargarRecordatorios() }, modifier = Modifier.padding(top = 8.dp)) {
-                            Text("Reintentar")
-                        }
                     }
                 }
                 is ListaUiState.ConDatos -> {
@@ -93,7 +149,8 @@ fun PantallaListado(
                         items(estado.recordatorios) { recordatorio ->
                             RecordatorioCard(
                                 recordatorio = recordatorio,
-                                onClick = { onRecordatorioClick(recordatorio.id) }
+                                onClick = { onRecordatorioClick(recordatorio.id) },
+                                onToggleCompleted = { viewModel.alternarCompletado(recordatorio) }
                             )
                         }
                     }
@@ -105,14 +162,42 @@ fun PantallaListado(
 
 
 @Composable
-fun RecordatorioCard(recordatorio: Recordatorio, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun RecordatorioCard(
+    recordatorio: Reminder, 
+    onClick: () -> Unit, 
+    onToggleCompleted: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Card(
         modifier = modifier.fillMaxWidth().clickable { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (recordatorio.isCompleted) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+        )
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(text = recordatorio.titulo, style = MaterialTheme.typography.titleMedium)
-            Text(text = "Categoría: ${recordatorio.categoria.name} | Prioridad: ${recordatorio.prioridad::class.simpleName}", style = MaterialTheme.typography.bodyMedium)
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = recordatorio.isCompleted,
+                onCheckedChange = { onToggleCompleted() }
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = recordatorio.title, 
+                    style = MaterialTheme.typography.titleMedium,
+                    textDecoration = if (recordatorio.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                )
+                Text(text = "Cat: ${recordatorio.category} | Prio: ${recordatorio.priority}", style = MaterialTheme.typography.bodyMedium)
+                val fechaFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(recordatorio.date))
+                Text(text = fechaFormat, style = MaterialTheme.typography.labelSmall)
+            }
+            if (recordatorio.isPendingSync) {
+                Text(
+                    text = "⚠️",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
         }
     }
 }
@@ -124,7 +209,6 @@ fun PantallaCreacion(viewModel: RecordatorioViewModel, onVolver: () -> Unit) {
     val estado by viewModel.formularioUiState.collectAsStateWithLifecycle()
     var expandido by remember { mutableStateOf(false) }
 
-    // Vuelve a la pantalla principal tras un guardado exitoso
     LaunchedEffect(estado.guardadoExitoso) {
         if (estado.guardadoExitoso) {
             viewModel.reiniciarFormulario()
@@ -160,7 +244,7 @@ fun PantallaCreacion(viewModel: RecordatorioViewModel, onVolver: () -> Unit) {
                 onExpandedChange = { expandido = !expandido }
             ) {
                 OutlinedTextField(
-                    value = estado.categoria?.name ?: "Seleccionar Categoría",
+                    value = estado.categoria ?: "Seleccionar Categoría",
                     onValueChange = {},
                     readOnly = true,
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandido) },
@@ -170,9 +254,9 @@ fun PantallaCreacion(viewModel: RecordatorioViewModel, onVolver: () -> Unit) {
                     expanded = expandido,
                     onDismissRequest = { expandido = false }
                 ) {
-                    com.example.recordatoriosapp.data.Categoria.values().forEach { cat ->
+                    listOf("Trabajo", "Personal", "Estudios", "Otros").forEach { cat ->
                         DropdownMenuItem(
-                            text = { Text(cat.name) },
+                            text = { Text(cat) },
                             onClick = {
                                 viewModel.seleccionarCategoria(cat)
                                 expandido = false
@@ -183,17 +267,12 @@ fun PantallaCreacion(viewModel: RecordatorioViewModel, onVolver: () -> Unit) {
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val prioridades = listOf(
-                    com.example.recordatoriosapp.data.Prioridad.Baja,
-                    com.example.recordatoriosapp.data.Prioridad.Media,
-                    com.example.recordatoriosapp.data.Prioridad.Alta
-                )
+                val prioridades = listOf("LOW", "MEDIUM", "HIGH")
                 prioridades.forEach { prio ->
-                    val nombre = prio::class.simpleName ?: ""
                     FilterChip(
                         selected = estado.prioridad == prio,
                         onClick = { viewModel.seleccionarPrioridad(prio) },
-                        label = { Text(nombre) }
+                        label = { Text(prio) }
                     )
                 }
             }
@@ -208,7 +287,7 @@ fun PantallaCreacion(viewModel: RecordatorioViewModel, onVolver: () -> Unit) {
                 if (estado.enviando) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text("Guardar Recordatorio")
+                    Text("Guardar Localmente")
                 }
             }
         }
@@ -220,7 +299,6 @@ fun PantallaCreacion(viewModel: RecordatorioViewModel, onVolver: () -> Unit) {
 fun PantallaDetalle(id: String, viewModel: RecordatorioViewModel, onVolver: () -> Unit) {
     val uiState by viewModel.listaUiState.collectAsStateWithLifecycle()
 
-    // Buscamos el recordatorio específico dentro del estado de la lista
     val recordatorio = remember(uiState, id) {
         when (uiState) {
             is ListaUiState.ConDatos -> (uiState as ListaUiState.ConDatos).recordatorios.find { it.id == id }
@@ -243,7 +321,7 @@ fun PantallaDetalle(id: String, viewModel: RecordatorioViewModel, onVolver: () -
         Box(modifier = Modifier.padding(paddingValues).padding(16.dp).fillMaxSize()) {
             if (recordatorio == null) {
                 Text(
-                    text = "No se encontró el recordatorio o los datos están cargando.",
+                    text = "No se encontró el recordatorio.",
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
@@ -256,20 +334,29 @@ fun PantallaDetalle(id: String, viewModel: RecordatorioViewModel, onVolver: () -
                         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(text = recordatorio.titulo, style = MaterialTheme.typography.headlineSmall)
+                            Text(text = recordatorio.title, style = MaterialTheme.typography.headlineSmall)
 
+                            if (recordatorio.isPendingSync) {
+                                Text(
+                                    text = "⚠️ Pendiente de sincronización",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                             Divider()
 
                             Text(text = "Descripción:", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                            Text(text = recordatorio.descripcion.ifEmpty { "Sin descripción" }, style = MaterialTheme.typography.bodyLarge)
+                            Text(text = recordatorio.description.ifEmpty { "Sin descripción" }, style = MaterialTheme.typography.bodyLarge)
 
                             Spacer(modifier = Modifier.height(8.dp))
 
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(text = "Categoría: ${recordatorio.categoria.name}", style = MaterialTheme.typography.bodyMedium)
-                                val prioridadesNombre = recordatorio.prioridad::class.simpleName ?: ""
-                                Text(text = "Prioridad: $prioridadesNombre", style = MaterialTheme.typography.bodyMedium)
+                                Text(text = "Cat: ${recordatorio.category}", style = MaterialTheme.typography.bodyMedium)
+                                Text(text = "Prio: ${recordatorio.priority}", style = MaterialTheme.typography.bodyMedium)
                             }
+                            
+                            val fechaFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(recordatorio.date))
+                            Text(text = "Creado: $fechaFormat", style = MaterialTheme.typography.bodySmall)
                         }
                     }
 
