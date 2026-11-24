@@ -16,7 +16,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.recordatoriosapp.BuildConfig
+import com.example.recordatoriosapp.data.auth.AuthState
 import com.example.recordatoriosapp.data.model.Reminder
+import com.example.recordatoriosapp.viewmodel.AuthViewModel
 import com.example.recordatoriosapp.viewmodel.ListaUiState
 import com.example.recordatoriosapp.viewmodel.RecordatorioViewModel
 import java.text.SimpleDateFormat
@@ -24,13 +27,14 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun RecordatoriosAppNavigation(viewModel: RecordatorioViewModel) {
+fun RecordatoriosAppNavigation(viewModel: RecordatorioViewModel, authViewModel: AuthViewModel) {
     val navController = rememberNavController()
 
     NavHost(navController = navController, startDestination = "listado") {
         composable("listado") {
             PantallaListado(
                 viewModel = viewModel,
+                authViewModel = authViewModel,
                 onCrearRecordatorio = { navController.navigate("creacion") },
                 onRecordatorioClick = { id -> navController.navigate("detalle/$id") }
             )
@@ -55,6 +59,7 @@ fun RecordatoriosAppNavigation(viewModel: RecordatorioViewModel) {
 @Composable
 fun PantallaListado(
     viewModel: RecordatorioViewModel,
+    authViewModel: AuthViewModel,
     onCrearRecordatorio: () -> Unit,
     onRecordatorioClick: (String) -> Unit
 ) {
@@ -62,14 +67,23 @@ fun PantallaListado(
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
     val userPrefs by viewModel.userPreferences.collectAsStateWithLifecycle()
     
+    val authState by authViewModel.authState.collectAsStateWithLifecycle()
+    val user = (authState as? AuthState.Authenticated)?.user
+    val testResult by authViewModel.testSecurityResult.collectAsStateWithLifecycle()
+    
     var showPreferencesDialog by remember { mutableStateOf(false) }
 
     if (showPreferencesDialog) {
         AlertDialog(
             onDismissRequest = { showPreferencesDialog = false },
-            title = { Text("Preferencias") },
+            title = { Text("Configuración") },
             text = {
                 Column {
+                    if (user != null) {
+                        Text("Sesión: ${user.email ?: user.uid}", style = MaterialTheme.typography.bodySmall)
+                        Text("App: v${BuildConfig.VERSION_NAME} - ${BuildConfig.ENVIRONMENT}", style = MaterialTheme.typography.labelSmall)
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = userPrefs.isDarkMode,
@@ -88,6 +102,28 @@ fun PantallaListado(
                         TextButton(onClick = { viewModel.toggleSortOrder() }) {
                             Text(if (userPrefs.sortOrder == "DATE_DESC") "Orden: Más recientes" else "Orden: Mayor Prioridad")
                         }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    
+                    if (BuildConfig.ENABLE_DEBUG_LOGS) {
+                        Button(onClick = { authViewModel.testSecurityIsolation("uid_ajeno_prueba") }) {
+                            Text("Probar Reglas Firestore")
+                        }
+                        if (testResult != null) {
+                            Text(text = testResult!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    Button(
+                        onClick = { 
+                            authViewModel.signOut()
+                            showPreferencesDialog = false 
+                        }, 
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Cerrar Sesión")
                     }
                 }
             },

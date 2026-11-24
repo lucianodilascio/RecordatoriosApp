@@ -145,9 +145,13 @@ class ReminderRepository(
         }
     }
 
-    // --- Limpieza Local ---
+    // --- Limpieza Local y Testing ---
     
     suspend fun clearLocalData() {
         reminderDao.clearAllReminders()
+    }
+
+    suspend fun testUnauthorizedAccess(targetUid: String): Result<Unit> {
+        return firestoreDataSource.testUnauthorizedAccess(targetUid)
     }
 }

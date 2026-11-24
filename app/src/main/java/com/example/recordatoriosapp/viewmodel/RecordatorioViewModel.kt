@@ -34,7 +34,8 @@ data class FormularioUiState(
 
 // 3. ViewModel
 class RecordatorioViewModel(
-    private val repository: ReminderRepository
+    private val repository: ReminderRepository,
+    private val authRepository: com.example.recordatoriosapp.data.auth.AuthRepository
 ) : ViewModel() {
 
     // --- Preferencias del usuario ---
@@ -88,8 +89,14 @@ class RecordatorioViewModel(
     val formularioUiState: StateFlow<FormularioUiState> = _formularioUiState.asStateFlow()
 
     init {
-        // Al iniciar, intentamos sincronizar con el servidor
-        sincronizarConServidor()
+        // Observar cuando se autentique el usuario para disparar la sincronización remota
+        viewModelScope.launch {
+            authRepository.authState.collect { state ->
+                if (state is com.example.recordatoriosapp.data.auth.AuthState.Authenticated) {
+                    sincronizarConServidor()
+                }
+            }
+        }
     }
 
     fun sincronizarConServidor() {
