@@ -5,19 +5,20 @@ import androidx.room.PrimaryKey
 
 /**
  * Entidad de base de datos para Room.
- * Representa la tabla donde persistiremos localmente los recordatorios.
+ * Modificada para aislar los datos por usuario (soporte multi-cuenta).
  */
 @Entity(tableName = "reminders")
 data class ReminderEntity(
-    @PrimaryKey val id: String, // Identificador estable (ej. UUID) proporcionado desde la creación
+    @PrimaryKey val id: String,
+    val userId: String, // Clave para aislar la información de cada cuenta
     val title: String,
     val description: String,
     val category: String,
-    val priority: String, // "LOW", "MEDIUM", "HIGH"
+    val priority: String,
     val isCompleted: Boolean,
-    val date: Long, // Unix timestamp en milisegundos
+    val date: Long,
     
-    // Campos necesarios para la lógica offline (sincronización con el repositorio)
+    // Campos necesarios para la lógica offline/sync
     val isPendingSync: Boolean = false, 
-    val isDeleted: Boolean = false // Borrado lógico para recordarlo y borrarlo en backend
+    val isDeleted: Boolean = false
 )

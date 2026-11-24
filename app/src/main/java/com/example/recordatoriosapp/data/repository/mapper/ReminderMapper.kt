@@ -2,12 +2,7 @@ package com.example.recordatoriosapp.data.repository.mapper
 
 import com.example.recordatoriosapp.data.local.entity.ReminderEntity
 import com.example.recordatoriosapp.data.model.Reminder
-import com.example.recordatoriosapp.data.remote.dto.ReminderDto
-
-/**
- * Funciones de extensión explícitas para transformar modelos entre las
- * distintas capas (Base de datos <-> Dominio <-> Red), separando responsabilidades.
- */
+import com.example.recordatoriosapp.data.remote.dto.FirestoreReminderDto
 
 // --- Entity <-> Domain ---
 
@@ -22,8 +17,9 @@ fun ReminderEntity.toDomain() = Reminder(
     isPendingSync = isPendingSync
 )
 
-fun Reminder.toEntity(isPendingSync: Boolean = false, isDeleted: Boolean = false) = ReminderEntity(
+fun Reminder.toEntity(userId: String, isPendingSync: Boolean = false, isDeleted: Boolean = false) = ReminderEntity(
     id = id,
+    userId = userId, // Añadido para multi-usuario
     title = title,
     description = description,
     category = category,
@@ -34,10 +30,11 @@ fun Reminder.toEntity(isPendingSync: Boolean = false, isDeleted: Boolean = false
     isDeleted = isDeleted
 )
 
-// --- DTO <-> Entity ---
+// --- Firestore DTO <-> Entity ---
 
-fun ReminderDto.toEntity(isPendingSync: Boolean = false) = ReminderEntity(
+fun FirestoreReminderDto.toEntity(userId: String, isPendingSync: Boolean = false) = ReminderEntity(
     id = id,
+    userId = userId,
     title = title,
     description = description,
     category = category,
@@ -45,10 +42,10 @@ fun ReminderDto.toEntity(isPendingSync: Boolean = false) = ReminderEntity(
     isCompleted = isCompleted,
     date = date,
     isPendingSync = isPendingSync,
-    isDeleted = false // Lo que viene del backend se asume que no está borrado lógicamente localmente
+    isDeleted = false // Lo que baja de Firestore nunca viene "borrado logicamente"
 )
 
-fun ReminderEntity.toDto() = ReminderDto(
+fun ReminderEntity.toFirestoreDto() = FirestoreReminderDto(
     id = id,
     title = title,
     description = description,

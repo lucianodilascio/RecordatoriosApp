@@ -1,153 +1,153 @@
 package com.example.recordatoriosapp.data.repository
 
 import android.util.Log
+import com.example.recordatoriosapp.data.auth.AuthRepository
+import com.example.recordatoriosapp.data.auth.AuthState
 import com.example.recordatoriosapp.data.local.dao.ReminderDao
 import com.example.recordatoriosapp.data.local.datastore.PreferencesManager
 import com.example.recordatoriosapp.data.local.entity.ReminderEntity
 import com.example.recordatoriosapp.data.model.Reminder
 import com.example.recordatoriosapp.data.model.UserPreferences
-import com.example.recordatoriosapp.data.remote.api.ReminderApiService
+import com.example.recordatoriosapp.data.remote.api.FirestoreReminderDataSource
 import com.example.recordatoriosapp.data.repository.mapper.toDomain
-import com.example.recordatoriosapp.data.repository.mapper.toDto
 import com.example.recordatoriosapp.data.repository.mapper.toEntity
+import com.example.recordatoriosapp.data.repository.mapper.toFirestoreDto
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
-import java.io.IOException
 
 /**
- * Repositorio Local-First.
- * Coordina Room (Fuente de verdad), Retrofit (Sincronización remota) y DataStore (Preferencias).
+ * Repositorio Local-First orquestador.
+ * Inyecta AuthRepository para aislar el UID de la Vista, garantizando que el ViewModel
+ * no se entere de los detalles de red/autenticación y la firma de los métodos quede intacta.
  */
 class ReminderRepository(
     private val reminderDao: ReminderDao,
-    private val apiService: ReminderApiService,
-    private val preferencesManager: PreferencesManager
+    private val firestoreDataSource: FirestoreReminderDataSource,
+    private val preferencesManager: PreferencesManager,
+    private val authRepository: AuthRepository
 ) {
     private val TAG = "ReminderRepository"
 
-    // --- Preferencias (Delegadas a DataStore) ---
-
     val userPreferencesFlow: Flow<UserPreferences> = preferencesManager.userPreferencesFlow
-
     suspend fun updateDarkMode(isDarkMode: Boolean) = preferencesManager.updateDarkMode(isDarkMode)
     suspend fun updateShowCompleted(showCompleted: Boolean) = preferencesManager.updateShowCompleted(showCompleted)
     suspend fun updateSortOrder(sortOrder: String) = preferencesManager.updateSortOrder(sortOrder)
 
+    // --- Lecturas Locales Reactivas (Fuente de Verdad = Room + AuthState) ---
 
-    // --- Lecturas Locales Reactivas (Fuente de Verdad = Room) ---
-
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun getAllReminders(): Flow<List<Reminder>> {
-        return reminderDao.getAllReminders().map { entities ->
-            entities.map { it.toDomain() }
+        return authRepository.authState.flatMapLatest { authState ->
+            if (authState is AuthState.Authenticated) {
+                reminderDao.getAllReminders(authState.user.uid).map { entities -> 
+                    entities.map { it.toDomain() } 
+                }
+            } else {
+                flowOf(emptyList()) // Si no hay sesión, emitimos lista vacía sin crashear
+            }
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun getRemindersByStatus(isCompleted: Boolean): Flow<List<Reminder>> {
-        return reminderDao.getRemindersByStatus(isCompleted).map { entities ->
-            entities.map { it.toDomain() }
+        return authRepository.authState.flatMapLatest { authState ->
+            if (authState is AuthState.Authenticated) {
+                reminderDao.getRemindersByStatus(authState.user.uid, isCompleted).map { entities -> 
+                    entities.map { it.toDomain() } 
+                }
+            } else {
+                flowOf(emptyList())
+            }
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun getReminderById(id: String): Flow<Reminder?> {
-        return reminderDao.getReminderById(id).map { it?.toDomain() }
+        return authRepository.authState.flatMapLatest { authState ->
+            if (authState is AuthState.Authenticated) {
+                reminderDao.getReminderById(authState.user.uid, id).map { it?.toDomain() }
+            } else {
+                flowOf(null)
+            }
+        }
     }
-
 
     // --- Operaciones CRUD Offline-First ---
 
     suspend fun createReminder(reminder: Reminder) {
-        // 1. Guardar localmente marcado como pendiente (offline first)
-        val entity = reminder.toEntity(isPendingSync = true)
-        reminderDao.insertReminder(entity)
+        val uid = authRepository.getCurrentUser()?.uid ?: return
         
-        // 2. Intentar sincronizar (fire and forget)
-        trySyncSingle(entity)
+        val entity = reminder.toEntity(userId = uid, isPendingSync = true)
+        reminderDao.insertReminder(entity)
+        trySyncSingle(uid, entity)
     }
 
     suspend fun updateReminder(reminder: Reminder) {
-        val entity = reminder.toEntity(isPendingSync = true)
+        val uid = authRepository.getCurrentUser()?.uid ?: return
+
+        val entity = reminder.toEntity(userId = uid, isPendingSync = true)
         reminderDao.updateReminder(entity)
-        trySyncSingle(entity)
+        trySyncSingle(uid, entity)
     }
 
     suspend fun deleteReminder(id: String) {
-        // Borrado lógico para ocultarlo de la UI inmediatamente
-        reminderDao.softDeleteReminder(id)
-        
-        // Recuperamos la entidad para intentar enviar el DELETE al servidor
-        val entityToDelete = reminderDao.getPendingSyncReminders().find { it.id == id }
-        entityToDelete?.let { trySyncSingle(it) }
+        val uid = authRepository.getCurrentUser()?.uid ?: return
+
+        reminderDao.softDeleteReminder(id, uid)
+        val entityToDelete = reminderDao.getPendingSyncReminders(uid).find { it.id == id }
+        entityToDelete?.let { trySyncSingle(uid, it) }
     }
 
+    // --- Sincronización Remota (Push-before-Pull) ---
 
-    // --- Sincronización Remota Controlada ---
-
-    /**
-     * Sincronización bidireccional.
-     * 1. Sube cambios locales pendientes (Push).
-     * 2. Descarga datos del servidor (Pull) y actualiza BD local respetando pendientes.
-     */
     suspend fun syncWithRemote() {
+        val uid = authRepository.getCurrentUser()?.uid ?: return
+
         // 1. Subir pendientes
-        val pendingEntities = reminderDao.getPendingSyncReminders()
+        val pendingEntities = reminderDao.getPendingSyncReminders(uid)
         for (entity in pendingEntities) {
-            trySyncSingle(entity)
+            trySyncSingle(uid, entity)
         }
 
         // 2. Descargar servidor
-        try {
-            val response = apiService.getReminders()
-            if (response.isSuccessful) {
-                response.body()?.let { dtos ->
-                    // Evitamos pisar registros locales que AÚN estén pendientes de subir (en caso de fallas recientes)
-                    val currentPendingIds = reminderDao.getPendingSyncReminders().map { it.id }.toSet()
-                    
-                    val newEntities = dtos.mapNotNull { dto ->
-                        if (currentPendingIds.contains(dto.id)) null else dto.toEntity(isPendingSync = false)
-                    }
-                    
-                    // Actualiza la BD, los flows de Room se encargarán de notificar a la UI
-                    reminderDao.insertReminders(newEntities)
-                }
-            } else {
-                Log.e(TAG, "Error HTTP al sincronizar lista (Pull): ${response.code()}")
+        val result = firestoreDataSource.fetchReminders(uid)
+        result.onSuccess { dtos ->
+            // Protegemos contra pisar registros locales pendientes
+            val currentPendingIds = reminderDao.getPendingSyncReminders(uid).map { it.id }.toSet()
+            
+            val newEntities = dtos.mapNotNull { dto ->
+                if (currentPendingIds.contains(dto.id)) null else dto.toEntity(uid, isPendingSync = false)
             }
-        } catch (e: IOException) {
-            Log.e(TAG, "Sin conexión al sincronizar lista (Pull): ${e.message}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error inesperado al sincronizar lista (Pull): ${e.message}")
+            reminderDao.insertReminders(newEntities)
+        }.onFailure { e ->
+            Log.e(TAG, "Error al sincronizar lista (Pull) en Firestore: ${e.message}")
         }
     }
 
-    /**
-     * Intenta sincronizar una única entidad hacia el servicio remoto (Push).
-     * Si la red falla o hay un error de servidor (500), se captura silenciosamente
-     * dejando la entidad en estado "isPendingSync = true".
-     */
-    private suspend fun trySyncSingle(entity: ReminderEntity) {
-        try {
-            val response = if (entity.isDeleted) {
-                apiService.deleteReminder(entity.id)
-            } else {
-                // Simplificación: Un POST o PUT unificado para updateReminder
-                apiService.updateReminder(entity.id, entity.toDto())
+    private suspend fun trySyncSingle(uid: String, entity: ReminderEntity) {
+        if (entity.isDeleted) {
+            val result = firestoreDataSource.deleteReminder(uid, entity.id)
+            result.onSuccess {
+                reminderDao.hardDeleteReminder(entity.id, uid)
+            }.onFailure {
+                Log.w(TAG, "Delete pendiente de red para ${entity.id}")
             }
-
-            // Consideramos 404 (Not Found) como éxito para borrados (ya no existe en backend)
-            if (response.isSuccessful || (entity.isDeleted && response.code() == 404)) {
-                if (entity.isDeleted) {
-                    reminderDao.hardDeleteReminder(entity.id)
-                } else {
-                    // Marcamos como sincronizado localmente
-                    reminderDao.updateReminder(entity.copy(isPendingSync = false))
-                }
-            } else {
-                Log.w(TAG, "Error del servidor sincronizando ${entity.id}: HTTP ${response.code()}")
+        } else {
+            val result = firestoreDataSource.upsertReminder(uid, entity.toFirestoreDto())
+            result.onSuccess {
+                reminderDao.updateReminder(entity.copy(isPendingSync = false))
+            }.onFailure {
+                Log.w(TAG, "Upsert pendiente de red para ${entity.id}")
             }
-        } catch (e: IOException) {
-            Log.e(TAG, "Fallo de red/timeout sincronizando ${entity.id}. Permanece pendiente.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error crítico sincronizando ${entity.id}: ${e.message}")
         }
+    }
+
+    // --- Limpieza Local ---
+    
+    suspend fun clearLocalData() {
+        reminderDao.clearAllReminders()
     }
 }

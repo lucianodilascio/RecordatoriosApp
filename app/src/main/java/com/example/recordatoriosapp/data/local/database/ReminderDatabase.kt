@@ -7,13 +7,12 @@ import androidx.room.RoomDatabase
 import com.example.recordatoriosapp.data.local.dao.ReminderDao
 import com.example.recordatoriosapp.data.local.entity.ReminderEntity
 
-@Database(entities = [ReminderEntity::class], version = 1, exportSchema = false)
+@Database(entities = [ReminderEntity::class], version = 2, exportSchema = false)
 abstract class ReminderDatabase : RoomDatabase() {
 
     abstract fun reminderDao(): ReminderDao
 
     companion object {
-        // Al marcarla como Volatile, garantizamos que los cambios sean visibles en todos los hilos
         @Volatile
         private var INSTANCE: ReminderDatabase? = null
 
@@ -23,7 +22,11 @@ abstract class ReminderDatabase : RoomDatabase() {
                     context.applicationContext,
                     ReminderDatabase::class.java,
                     "reminder_database"
-                ).build()
+                )
+                // Usamos migración destructiva porque estamos en fase de desarrollo 
+                // y agregamos el campo 'userId' que rompe el esquema anterior.
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
                 INSTANCE = instance
                 instance
             }
