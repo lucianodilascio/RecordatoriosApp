@@ -1,3 +1,3 @@
 <resources>
-    <string name="app_name">RecordatoriosApp</string>
+    <!-- <string name="app_name">RecordatoriosApp</string> Omitido para inyectarlo desde build.gradle.kts -->
 </resources>
