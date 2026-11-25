@@ -10,3 +10,19 @@
 #-keepclassmembers class fqcn.of.javascript.interface.for.webview {
 #   public *;
 #}
+
+
+# Proteger Room Database, DAOs y Entidades
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class * { *; }
+-keep @androidx.room.Dao class * { *; }
+-keep class com.example.recordatoriosapp.data.local.** { *; }
+
+# Proteger DTOs de Firestore
+-keep class com.example.recordatoriosapp.data.remote.dto.** { *; }
+
+# Evitar IllegalAccessError de R8 en clases de Kotlin stdlib y Coroutines
+-keep class kotlin.** { *; }
+-keep class kotlinx.coroutines.** { *; }
+-dontwarn kotlin.**
+-dontwarn kotlinx.coroutines.**
